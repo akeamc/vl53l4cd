@@ -210,7 +210,7 @@ pub enum Status {
 }
 
 /// Severity of a measurement status.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 pub enum Severity {
     /// The measurement is completely valid.
     None,
