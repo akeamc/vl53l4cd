@@ -8,7 +8,7 @@ repository = "https://github.com/akeamc/vl53l4cd"
 
 [dependencies]
 i2cdev = "0.5.1"
-tokio = { version = "1.20.0", features = ["time"] }
+tokio = { version = "1.20.0", features = ["time"], optional = true }
 tracing = { version = "0.1.35", optional = true }
 
 [dev-dependencies]
