@@ -8,3 +8,4 @@ repository = "https://github.com/akeamc/vl53l4cd"
 
 [dependencies]
 i2cdev = "0.5.1"
+tracing = { version = "0.1.35", optional = true }

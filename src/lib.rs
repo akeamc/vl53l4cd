@@ -32,6 +32,9 @@ use i2cdev::{
     linux::{LinuxI2CDevice, LinuxI2CError},
 };
 
+#[cfg(feature = "tracing")]
+use tracing::{debug, instrument, trace};
+
 const DEFAULT_CONFIG: &[u8] = &[
     // value    addr : description
     0x12, // 0x2d : set bit 2 and 5 to 1 for fast plus mode (1MHz I2C), else don't touch
@@ -260,6 +263,7 @@ impl Vl53l4cd {
         Self { i2c }
     }
 
+    #[cfg_attr(feature = "tracing", instrument(err, skip(self)))]
     pub fn init(&mut self) -> Result<(), LinuxI2CError> {
         self.i2c.write(&[])?;
 
@@ -267,11 +271,17 @@ impl Vl53l4cd {
 
         assert_eq!(id, 0xebaa, "strange id ({:x})", id);
 
+        #[cfg(feature = "tracing")]
+        debug!("waiting for boot");
+
         while self.status()? != 0x3 {
             sleep(Duration::from_millis(1)); // wait for boot
         }
 
         sleep(Duration::from_millis(1));
+
+        #[cfg(feature = "tracing")]
+        debug!("booted");
 
         self.write_bytes(0x2d, DEFAULT_CONFIG)?;
         sleep(Duration::from_millis(10));
@@ -406,8 +416,13 @@ impl Vl53l4cd {
         self.read_word(IDENTIFICATION_MODEL_ID)
     }
 
+    #[cfg_attr(feature = "tracing", instrument(level = "trace", skip(self, buf), fields(len = %buf.len())))]
     fn read_bytes(&mut self, reg: u16, buf: &mut [u8]) -> Result<(), LinuxI2CError> {
+        #[cfg(feature = "tracing")]
+        trace!("write {:x?}", reg.to_be_bytes());
         self.i2c.write(&reg.to_be_bytes())?;
+        #[cfg(feature = "tracing")]
+        trace!("read {}", buf.len());
         self.i2c.read(buf)
     }
 
@@ -429,8 +444,12 @@ impl Vl53l4cd {
         Ok(u32::from_be_bytes(buf))
     }
 
+    #[cfg_attr(feature = "tracing", instrument(level = "trace", skip(self, data)))]
     fn write_bytes(&mut self, reg: u16, data: &[u8]) -> Result<(), LinuxI2CError> {
-        self.i2c.write(&[&reg.to_be_bytes(), data].concat())
+        let data = [&reg.to_be_bytes(), data].concat();
+        #[cfg(feature = "tracing")]
+        trace!("write {:x?}", data);
+        self.i2c.write(&data)
     }
 
     fn write_byte(&mut self, reg: u16, data: u8) -> Result<(), LinuxI2CError> {
