@@ -351,6 +351,17 @@ impl Vl53l4cd {
 
     /// Set the range timing for this sensor. The timing budget *must*
     /// be greater than or equal to 10 ms and less than or equal to 200 ms.
+    /// From the manufacturer's user manual:
+    ///
+    /// > The range timing is a single function which allows the user to define the VCSEL timeout and the ranging
+    /// > frequency of the sensor. It is composed of two elements:
+    /// > * The Timing budget: It corresponds to the VCSEL enabled time. The user can choose a value between 10 ms
+    /// > and 200 ms. If the InterMeasurement is set to 0, the VCSEL is always enabled, so the TimingBudget is
+    /// > equal to the ranging period between consecutive measurements.
+    /// > * The InterMeasurement: It allows the user to define the time between two consecutive measurements.
+    /// > To use the InterMeasurement, the user needs to set a value greater than the TimingBudget. When the
+    /// > TimingBudget is consumed, the device goes into low power mode until the InterMeasurement is reached. A
+    /// > value set to 0 disables the InterMeasurement.
     ///
     /// # Panics
     ///
