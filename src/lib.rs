@@ -37,7 +37,6 @@ use i2cdev::{
 #[cfg(feature = "tracing")]
 use tracing::{debug, instrument, trace};
 
-#[cfg(feature = "tokio")]
 const DEFAULT_CONFIG_MSG: &[u8] = &[
     0x00, // first byte of register to write to
     0x2d, // second byte of register to write to
@@ -321,7 +320,6 @@ impl Vl53l4cd {
     /// If the device id reported by the sensor isn't `0xebaa`, this
     /// function panics. This is mostly done to prevent strange
     /// I<sup>2</sup>C bugs where all returned bytes are zeroed.
-    #[cfg(feature = "tokio")]
     #[cfg_attr(feature = "tracing", instrument(err, skip(self)))]
     pub async fn init(&mut self) -> Result<(), LinuxI2CError> {
         let id = self.read_word(Register::IDENTIFICATION_MODEL_ID)?;
@@ -423,7 +421,6 @@ impl Vl53l4cd {
     /// the measurement. This function polls the sensor for a measurement
     /// until one is available, reads the measurement and finally clears
     /// the interrupt in order to request another measurement.
-    #[cfg(feature = "tokio")]
     pub async fn measure(&mut self) -> Result<Measurement, LinuxI2CError> {
         while !self.has_measurement()? {
             tokio::time::sleep(DATA_POLL_INTERVAL).await;
