@@ -1,31 +1,33 @@
-//! The [VL53L4CD ToF distance sensor](https://www.st.com/en/imaging-and-photonics-solutions/vl53l4cd.html)
-//! meets Linux!
+//! Async driver for the [VL53L4CD ToF distance sensor](https://www.st.com/en/imaging-and-photonics-solutions/vl53l4cd.html).
 //!
 //! ```no_run
+//! # tokio_test::block_on(async {
 //! use vl53l4cd::Vl53l4cd;
 //! use vl53l4cd::i2cdev::linux::LinuxI2CDevice;
 //!
 //! let mut dev = LinuxI2CDevice::new("/dev/i2c-1", vl53l4cd::PERIPHERAL_ADDR)?;
 //! let mut vl53 = Vl53l4cd::new(dev);
 //!
-//! vl53.init()?;
+//! vl53.init().await?;
 //! vl53.set_range_timing(200, 0)?;
-//! vl53.start_ranging()?;
+//! vl53.start_ranging().await?;
 //!
 //! loop {
-//!     vl53.wait_for_data()?;
-//!     let sample = vl53.get_sample()?;
-//!     if sample.is_valid() {
-//!         println!("{} mm", sample.distance);
+//!     let measurement = vl53.measure().await?;
+//!     if measurement.is_valid() {
+//!         println!("{} mm", measurement.distance);
 //!     }
-//!     vl53.clear_interrupt()?;
 //! }
 //! # Ok::<(), i2cdev::linux::LinuxI2CError>(())
+//! # });
 //! ```
 
-pub use i2cdev;
+#![warn(missing_docs)]
 
-use std::{thread::sleep, time::Duration};
+pub use i2cdev;
+use tokio::time::sleep;
+
+use std::time::Duration;
 
 use i2cdev::{
     core::I2CDevice,
@@ -150,31 +152,49 @@ const IDENTIFICATION_MODEL_ID: u16 = 0x010f;
 /// Default I<sup>2</sup>C address of the VL53L4CD.
 pub const PERIPHERAL_ADDR: u16 = 0x29;
 
+const DATA_POLL_INTERVAL: Duration = Duration::from_millis(1);
+const BOOT_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// A measurement status.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum Status {
+    /// Returned distance is valid.
     Valid = 0,
+    /// Sigma is above the defined threshol.
     SigmaAboveThreshold,
+    /// Signal is below the defined threshold.
     SigmaBelowThreshold,
+    /// Measured distance is below detection threshold.
     DistanceBelowDetectionThreshold,
+    /// Phase out of valid limit.
     InvalidPhase,
+    /// Hardware failure.
     HardwareFail,
+    /// Phase valid but no wrap around check performed.
     NoWrapAroundCheck,
+    /// Wrapped target, phase does not match.
     WrappedTargetPhaseMismatch,
+    /// Processing fail.
     ProcessingFail,
+    /// Crosstalk signal fail.
     XTalkFail,
+    /// Interrupt error.
     InterruptError,
+    /// Merged target.
     MergedTarget,
+    /// Too low signal.
     SignalTooWeak,
+    /// Other error (e.g. boot error).
     Other = 255,
 }
 
-/// Severity of a sample status.
+/// Severity of a measurement status.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Severity {
-    /// The sample is completely valid.
+    /// The measurement is completely valid.
     None,
-    /// The computed sample might be somewhat correct.
+    /// The computed measurement might be somewhat correct.
     Warning,
     /// Something went very wrong.
     Error,
@@ -201,6 +221,7 @@ impl Status {
         }
     }
 
+    /// Severity of this status as per the user manual.
     pub fn severity(&self) -> Severity {
         match self {
             Status::Valid => Severity::None,
@@ -221,8 +242,9 @@ impl Status {
     }
 }
 
+/// A VL53L4CD measurement.
 #[derive(Debug, Clone, Copy)]
-pub struct Sample {
+pub struct Measurement {
     /// Validity of the measurement.
     pub status: Status,
     /// Measured distance to the target (millimeters).
@@ -232,14 +254,14 @@ pub struct Sample {
     /// measure the ambient signal rate due to noise.
     ///
     /// The returned value is measured in thousand counts
-    /// per second (kcps) (10<sup>3</sup> * s<sup>-1<sup>).
+    /// per second (kcps) (10<sup>3</sup> * s<sup>-1</sup>).
     pub ambient_rate: u16,
     /// Number of detected photos during the VCSEL pulse.
     ///
     /// The returned value is measured in thousand counts
-    /// per second (kcps) (10<sup>3</sup> * s<sup>-1<sup>).
+    /// per second (kcps) (10<sup>3</sup> * s<sup>-1</sup>).
     pub signal_rate: u16,
-    /// Number of SPADs enabled for this sample. Targets that
+    /// Number of SPADs enabled for this measurement. Targets that
     /// are far away or have low reflectance will activate
     /// more SPADs.
     pub spads_enabled: u16,
@@ -248,23 +270,35 @@ pub struct Sample {
     pub sigma: u16,
 }
 
-impl Sample {
+impl Measurement {
+    /// Whether this measurement is valid or not, given its status.
+    #[inline]
     pub fn is_valid(&self) -> bool {
         self.status == Status::Valid
     }
 }
 
+/// A VL53L4CD ToF range sensor.
 pub struct Vl53l4cd {
     i2c: LinuxI2CDevice,
 }
 
 impl Vl53l4cd {
+    /// Construct a new sensor, without sending
+    /// any commands. To begin measuring, you
+    /// need to call [`Self::init`] as well as
+    /// [`Self::start_ranging`]:
+    ///
+    /// ```no_run
+    ///
+    /// ```
     pub fn new(i2c: LinuxI2CDevice) -> Self {
         Self { i2c }
     }
 
+    /// Initialize the sensor.
     #[cfg_attr(feature = "tracing", instrument(err, skip(self)))]
-    pub fn init(&mut self) -> Result<(), LinuxI2CError> {
+    pub async fn init(&mut self) -> Result<(), LinuxI2CError> {
         self.i2c.write(&[])?;
 
         let id = self.device_id()?;
@@ -274,23 +308,17 @@ impl Vl53l4cd {
         #[cfg(feature = "tracing")]
         debug!("waiting for boot");
 
-        while self.status()? != 0x3 {
-            sleep(Duration::from_millis(1)); // wait for boot
+        while self.read_byte(0xE5)? != 0x3 {
+            sleep(BOOT_POLL_INTERVAL).await; // wait for boot
         }
-
-        sleep(Duration::from_millis(1));
 
         #[cfg(feature = "tracing")]
         debug!("booted");
 
         self.write_bytes(0x2d, DEFAULT_CONFIG)?;
-        sleep(Duration::from_millis(10));
 
         // start VHV
-        self.start_ranging()?;
-        self.wait_for_data()?;
-        self.clear_interrupt()?;
-        // self.write_byte(SYSTEM_START, 0x40)?;
+        self.start_ranging().await?;
         self.stop_ranging()?;
         self.write_byte(VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND, 0x09)?;
         self.write_byte(0x0b, 0)?;
@@ -301,6 +329,17 @@ impl Vl53l4cd {
         Ok(())
     }
 
+    /// Set the range timing for this sensor. The timing budget *must*
+    /// be greater than or equal to 10 ms and less than or equal to 200 ms.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the timing budget is less than 10 ms or more than 200 ms,
+    /// or if the timing budget is less than the inter-measurement time
+    /// (except for then the inter-measurement time is zero).
+    ///
+    /// If the oscillation frequency reported by the sensor (2 bytes starting
+    /// at register `0x0006`) is zero, this function panics.
     pub fn set_range_timing(
         &mut self,
         timing_budget_ms: u32,
@@ -358,26 +397,33 @@ impl Vl53l4cd {
         Ok(())
     }
 
-    pub fn data_ready(&mut self) -> Result<bool, LinuxI2CError> {
+    /// Wait for a measurement to be available on the sensor and then read
+    /// the measurement. This function polls the sensor for a measurement
+    /// until one is available, reads the measurement and finally clears
+    /// the interrupt in order to request another measurement.
+    pub async fn measure(&mut self) -> Result<Measurement, LinuxI2CError> {
+        while !self.has_measurement()? {
+            sleep(DATA_POLL_INTERVAL).await;
+        }
+
+        let measurement = self.read_measurement()?;
+        self.clear_interrupt()?;
+
+        Ok(measurement)
+    }
+
+    #[inline]
+    fn has_measurement(&mut self) -> Result<bool, LinuxI2CError> {
         let ctrl = self.read_byte(GPIO_HV_MUX_CTRL)?;
         let status = self.read_byte(GPIO_TIO_HV_STATUS)?;
         Ok(status & 1 != ctrl >> 4 & 1)
     }
 
-    pub fn wait_for_data(&mut self) -> Result<(), LinuxI2CError> {
-        while !self.data_ready()? {
-            sleep(Duration::from_millis(1));
-        }
-
-        sleep(Duration::from_millis(1));
-
-        Ok(())
-    }
-
-    pub fn get_sample(&mut self) -> Result<Sample, LinuxI2CError> {
+    #[inline]
+    fn read_measurement(&mut self) -> Result<Measurement, LinuxI2CError> {
         let status = self.read_byte(RESULT_RANGE_STATUS)? & 0x1f;
 
-        Ok(Sample {
+        Ok(Measurement {
             status: Status::from_rtn(status),
             distance: self.read_word(RESULT_DISTANCE)?,
             spads_enabled: self.read_word(RESULT_NUM_SPADS)? / 256,
@@ -387,32 +433,30 @@ impl Vl53l4cd {
         })
     }
 
-    pub fn clear_interrupt(&mut self) -> Result<(), LinuxI2CError> {
+    #[inline]
+    fn clear_interrupt(&mut self) -> Result<(), LinuxI2CError> {
         self.write_byte(SYSTEM_INTERRUPT_CLEAR, 0x01)
     }
 
+    /// Begin ranging.
+    #[inline]
+    pub async fn start_ranging(&mut self) -> Result<(), LinuxI2CError> {
+        if self.read_dword(INTERMEASUREMENT_MS)? == 0 {
+            // autonomous mode
+            self.write_byte(SYSTEM_START, 0x21)
+        } else {
+            // continuous mode
+            self.write_byte(SYSTEM_START, 0x40)
+        }
+    }
+
+    /// Stop ranging.
+    #[inline]
     pub fn stop_ranging(&mut self) -> Result<(), LinuxI2CError> {
         self.write_byte(SYSTEM_START, 0x00)
     }
 
-    pub fn start_ranging(&mut self) -> Result<(), LinuxI2CError> {
-        if self.read_dword(INTERMEASUREMENT_MS)? == 0 {
-            // autonomous mode
-            self.write_byte(SYSTEM_START, 0x21)?;
-        } else {
-            // continuous mode
-            self.write_byte(SYSTEM_START, 0x40)?;
-        }
-
-        self.wait_for_data()?;
-        self.clear_interrupt()
-    }
-
-    fn status(&mut self) -> Result<u8, LinuxI2CError> {
-        self.read_byte(0xE5)
-    }
-
-    pub fn device_id(&mut self) -> Result<u16, LinuxI2CError> {
+    fn device_id(&mut self) -> Result<u16, LinuxI2CError> {
         self.read_word(IDENTIFICATION_MODEL_ID)
     }
 

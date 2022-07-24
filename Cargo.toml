@@ -1,11 +1,15 @@
 [package]
 name = "vl53l4cd"
-description = "VL53L4CD ToF ranging sensor support for Linux"
-version = "0.1.0"
+description = "VL53L4CD ToF ranging sensor driver"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/akeamc/vl53l4cd"
 
 [dependencies]
 i2cdev = "0.5.1"
+tokio = { version = "1.20.0", features = ["time"] }
 tracing = { version = "0.1.35", optional = true }
+
+[dev-dependencies]
+tokio-test = "0.4.2"
