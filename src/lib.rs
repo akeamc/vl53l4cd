@@ -338,7 +338,7 @@ impl Vl53l4cd {
         self.i2c.write(DEFAULT_CONFIG_MSG)?;
 
         // start VHV
-        self.start_ranging()?;
+        self.start_ranging().await?;
         self.stop_ranging()?;
         self.write_byte(Register::VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND, 0x09)?;
         self.write_byte(Register::MYSTERY_1, 0)?;
@@ -393,6 +393,8 @@ impl Vl53l4cd {
             self.write_dword(Register::INTERMEASUREMENT_MS, 0)?;
             timing_budget_us -= 2500;
         } else if inter_measurement_ms > timing_budget_ms {
+            assert!(inter_measurement_ms <= timing_budget_ms, "timing budget must be greater than or equal to inter-measurement");
+
             // autonomous low power mode
             let clock_pll = u32::from(self.read_word(Register::RESULT_OSC_CALIBRATE_VAL)? & 0x3ff);
             let inter_measurement_fac = 1.055 * (inter_measurement_ms * clock_pll) as f32;
@@ -400,8 +402,6 @@ impl Vl53l4cd {
 
             timing_budget_us -= 4300;
             timing_budget_us /= 2;
-        } else {
-            panic!("timing budget must not be less than inter-measurement");
         }
 
         // reg a
@@ -504,14 +504,18 @@ impl Vl53l4cd {
 
     /// Begin ranging.
     #[inline]
-    pub fn start_ranging(&mut self) -> Result<(), LinuxI2CError> {
+    pub async fn start_ranging(&mut self) -> Result<(), LinuxI2CError> {
         if self.read_dword(Register::INTERMEASUREMENT_MS)? == 0 {
             // autonomous mode
-            self.write_byte(Register::SYSTEM_START, 0x21)
+            self.write_byte(Register::SYSTEM_START, 0x21)?;
         } else {
             // continuous mode
-            self.write_byte(Register::SYSTEM_START, 0x40)
+            self.write_byte(Register::SYSTEM_START, 0x40)?;
         }
+
+        self.measure().await?;
+
+        Ok(())
     }
 
     /// Stop ranging.
