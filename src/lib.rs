@@ -393,7 +393,10 @@ impl Vl53l4cd {
             self.write_dword(Register::INTERMEASUREMENT_MS, 0)?;
             timing_budget_us -= 2500;
         } else if inter_measurement_ms > timing_budget_ms {
-            assert!(inter_measurement_ms <= timing_budget_ms, "timing budget must be greater than or equal to inter-measurement");
+            assert!(
+                inter_measurement_ms <= timing_budget_ms,
+                "timing budget must be greater than or equal to inter-measurement"
+            );
 
             // autonomous low power mode
             let clock_pll = u32::from(self.read_word(Register::RESULT_OSC_CALIBRATE_VAL)? & 0x3ff);
@@ -414,7 +417,7 @@ impl Vl53l4cd {
             ls_byte >>= 1;
             ms_byte += 1;
         }
-        ms_byte <<= 8 + (ls_byte * 0xff) as u16;
+        ms_byte = ms_byte << 8 + (ls_byte & 0xff) as u16;
         self.write_word(Register::RANGE_CONFIG_A, ms_byte)?;
 
         // reg b
@@ -513,9 +516,11 @@ impl Vl53l4cd {
             self.write_byte(Register::SYSTEM_START, 0x40)?;
         }
 
-        self.measure().await?;
+        while !self.has_measurement()? {
+            tokio::time::sleep(DATA_POLL_INTERVAL).await;
+        }
 
-        Ok(())
+        self.clear_interrupt()
     }
 
     /// Stop ranging.
