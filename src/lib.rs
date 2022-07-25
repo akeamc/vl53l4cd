@@ -371,6 +371,7 @@ impl Vl53l4cd {
     ///
     /// If the oscillation frequency reported by the sensor (2 bytes starting
     /// at register `0x0006`) is zero, this function panics.
+    #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self), err))]
     pub fn set_range_timing(
         &mut self,
         timing_budget_ms: u32,
@@ -493,6 +494,7 @@ impl Vl53l4cd {
     /// # Ok::<(), i2cdev::linux::LinuxI2CError>(())
     /// ```
     #[inline]
+    #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self), ret, err))]
     pub fn read_measurement(&mut self) -> Result<Measurement, LinuxI2CError> {
         let status = self.read_byte(Register::RESULT_RANGE_STATUS)? & 0x1f;
 
@@ -508,12 +510,14 @@ impl Vl53l4cd {
 
     /// Clear the interrupt which will eventually trigger a new measurement.
     #[inline]
+    #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self), ret, err))]
     pub fn clear_interrupt(&mut self) -> Result<(), LinuxI2CError> {
         self.write_byte(Register::SYSTEM_INTERRUPT_CLEAR, 0x01)
     }
 
     /// Begin ranging.
     #[inline]
+    #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self), ret, err))]
     pub async fn start_ranging(&mut self) -> Result<(), LinuxI2CError> {
         if self.read_dword(Register::INTERMEASUREMENT_MS)? == 0 {
             // autonomous mode
@@ -532,6 +536,7 @@ impl Vl53l4cd {
 
     /// Stop ranging.
     #[inline]
+    #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self), ret, err))]
     pub fn stop_ranging(&mut self) -> Result<(), LinuxI2CError> {
         self.write_byte(Register::SYSTEM_START, 0x00)
     }
