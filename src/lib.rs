@@ -396,11 +396,6 @@ impl Vl53l4cd {
             // autonomous low power mode
             let clock_pll = u32::from(self.read_word(Register::RESULT_OSC_CALIBRATE_VAL)? & 0x3ff);
             let inter_measurement_fac = 1.055 * (inter_measurement_ms * clock_pll) as f32;
-            #[cfg(feature = "tracing")]
-            debug!(
-                "{}, {}",
-                inter_measurement_fac, inter_measurement_fac as u32
-            );
             self.write_dword(Register::INTERMEASUREMENT_MS, inter_measurement_fac as u32)?;
 
             timing_budget_us -= 4300;
