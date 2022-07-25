@@ -172,9 +172,6 @@ impl Register {
 /// Default I<sup>2</sup>C address of the VL53L4CD.
 pub const PERIPHERAL_ADDR: u16 = 0x29;
 
-/// Poll interval for [`Vl53l4cd::has_measurement`].
-pub const DATA_POLL_INTERVAL: Duration = Duration::from_millis(1);
-
 /// A measurement status.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
@@ -442,12 +439,7 @@ impl Vl53l4cd {
     /// the interrupt in order to request another measurement.
     #[cfg_attr(feature = "tracing", instrument(ret, skip(self)))]
     pub async fn measure(&mut self) -> Result<Measurement, LinuxI2CError> {
-        #[cfg(feature = "tracing")]
-        debug!("waiting for measurement");
-
-        while !self.has_measurement()? {
-            tokio::time::sleep(DATA_POLL_INTERVAL).await;
-        }
+        self.wait_for_measurement().await?;
 
         #[cfg(feature = "tracing")]
         debug!("measurement ready; reading");
@@ -456,6 +448,42 @@ impl Vl53l4cd {
         self.clear_interrupt()?;
 
         Ok(measurement)
+    }
+
+    /// Adjust the sensor to prevent the measurements from deviating due to
+    /// ambient temperature variations. The ranging needs to be stopped with
+    /// [`Self::stop_ranging`] before calling this function.
+    ///
+    /// > Ambient temperature has an effect on ranging accuracy. In order to ensure the best performances, a temperature
+    /// > update needs to be applied to the sensor. This update needs to be performed when the temperature might have
+    /// > changed by more than 8 degrees Celsius.
+    #[cfg_attr(feature = "tracing", instrument(skip(self), ret))]
+    pub async fn start_temperature_update(&mut self) -> Result<(), LinuxI2CError> {
+        self.write_byte(Register::VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND, 0x81)?;
+        self.write_byte(Register::MYSTERY_1, 0x92)?;
+        self.write_byte(Register::SYSTEM_START, 0x40)?;
+
+        self.wait_for_measurement().await?;
+        self.clear_interrupt()?;
+        self.stop_ranging()?;
+
+        self.write_byte(Register::VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND, 0x09)?;
+        self.write_byte(Register::MYSTERY_1, 0)?;
+
+        Ok(())
+    }
+
+    /// Poll the sensor until a measurement is ready.
+    #[cfg_attr(feature = "tracing", instrument(skip(self)))]
+    pub async fn wait_for_measurement(&mut self) -> Result<(), LinuxI2CError> {
+        #[cfg(feature = "tracing")]
+        debug!("waiting for measurement");
+
+        while !self.has_measurement()? {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        Ok(())
     }
 
     /// Check if the sensor has a measurement ready. Unless you really like
@@ -527,10 +555,7 @@ impl Vl53l4cd {
             self.write_byte(Register::SYSTEM_START, 0x40)?;
         }
 
-        while !self.has_measurement()? {
-            tokio::time::sleep(DATA_POLL_INTERVAL).await;
-        }
-
+        self.wait_for_measurement().await?;
         self.clear_interrupt()
     }
 
