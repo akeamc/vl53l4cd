@@ -439,10 +439,17 @@ impl Vl53l4cd {
     /// the measurement. This function polls the sensor for a measurement
     /// until one is available, reads the measurement and finally clears
     /// the interrupt in order to request another measurement.
+    #[cfg_attr(feature = "tracing", instrument(ret, skip(self)))]
     pub async fn measure(&mut self) -> Result<Measurement, LinuxI2CError> {
+        #[cfg(feature = "tracing")]
+        debug!("waiting for measurement");
+
         while !self.has_measurement()? {
             tokio::time::sleep(DATA_POLL_INTERVAL).await;
         }
+
+        #[cfg(feature = "tracing")]
+        debug!("measurement ready; reading");
 
         let measurement = self.read_measurement()?;
         self.clear_interrupt()?;
