@@ -135,7 +135,7 @@ const DEFAULT_CONFIG_MSG: &[u8] = &[
 ];
 
 #[derive(Debug, Clone, Copy)]
-#[allow(non_camel_case_types, dead_code)]
+#[allow(non_camel_case_types)]
 enum Register {
     OSC_FREQ = 0x0006,
     VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND = 0x0008,
@@ -154,7 +154,7 @@ enum Register {
     RESULT_AMBIENT_RATE = 0x0090,
     RESULT_SIGMA = 0x0092,
     RESULT_DISTANCE = 0x0096,
-    // RESULT_OSC_CALIBRATE_VAL = 0x00de,
+    RESULT_OSC_CALIBRATE_VAL = 0x00de,
     SYSTEM_STATUS = 0x00e5,
     IDENTIFICATION_MODEL_ID = 0x010f,
 }
@@ -394,6 +394,15 @@ impl Vl53l4cd {
             timing_budget_us -= 2500;
         } else if inter_measurement_ms > timing_budget_ms {
             // autonomous low power mode
+            let clock_pll = u32::from(self.read_word(Register::RESULT_OSC_CALIBRATE_VAL)? & 0x3ff);
+            let inter_measurement_fac = 1.055 * (inter_measurement_ms * clock_pll) as f32;
+            #[cfg(feature = "tracing")]
+            debug!(
+                "{}, {}",
+                inter_measurement_fac, inter_measurement_fac as u32
+            );
+            self.write_dword(Register::INTERMEASUREMENT_MS, inter_measurement_fac as u32)?;
+
             timing_budget_us -= 4300;
             timing_budget_us /= 2;
         } else {
