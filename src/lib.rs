@@ -135,7 +135,7 @@ const DEFAULT_CONFIG_MSG: &[u8] = &[
 ];
 
 #[derive(Debug, Clone, Copy)]
-#[allow(non_camel_case_types, dead_code)]
+#[allow(non_camel_case_types)]
 enum Register {
     OSC_FREQ = 0x0006,
     VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND = 0x0008,
@@ -154,7 +154,7 @@ enum Register {
     RESULT_AMBIENT_RATE = 0x0090,
     RESULT_SIGMA = 0x0092,
     RESULT_DISTANCE = 0x0096,
-    // RESULT_OSC_CALIBRATE_VAL = 0x00de,
+    RESULT_OSC_CALIBRATE_VAL = 0x00de,
     SYSTEM_STATUS = 0x00e5,
     IDENTIFICATION_MODEL_ID = 0x010f,
 }
@@ -338,7 +338,7 @@ impl Vl53l4cd {
         self.i2c.write(DEFAULT_CONFIG_MSG)?;
 
         // start VHV
-        self.start_ranging()?;
+        self.start_ranging().await?;
         self.stop_ranging()?;
         self.write_byte(Register::VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND, 0x09)?;
         self.write_byte(Register::MYSTERY_1, 0)?;
@@ -392,12 +392,19 @@ impl Vl53l4cd {
             // continuous mode
             self.write_dword(Register::INTERMEASUREMENT_MS, 0)?;
             timing_budget_us -= 2500;
-        } else if inter_measurement_ms > timing_budget_ms {
+        } else {
+            assert!(
+                inter_measurement_ms <= timing_budget_ms,
+                "timing budget must be greater than or equal to inter-measurement"
+            );
+
             // autonomous low power mode
+            let clock_pll = u32::from(self.read_word(Register::RESULT_OSC_CALIBRATE_VAL)? & 0x3ff);
+            let inter_measurement_fac = 1.055 * (inter_measurement_ms * clock_pll) as f32;
+            self.write_dword(Register::INTERMEASUREMENT_MS, inter_measurement_fac as u32)?;
+
             timing_budget_us -= 4300;
             timing_budget_us /= 2;
-        } else {
-            panic!("timing budget must not be less than inter-measurement");
         }
 
         // reg a
@@ -410,7 +417,7 @@ impl Vl53l4cd {
             ls_byte >>= 1;
             ms_byte += 1;
         }
-        ms_byte <<= 8 + (ls_byte * 0xff) as u16;
+        ms_byte = (ms_byte << 8) + (ls_byte & 0xff) as u16;
         self.write_word(Register::RANGE_CONFIG_A, ms_byte)?;
 
         // reg b
@@ -422,7 +429,7 @@ impl Vl53l4cd {
             ls_byte >>= 1;
             ms_byte += 1;
         }
-        ms_byte = (ms_byte << 8) + (ls_byte & 0xFF) as u16;
+        ms_byte = (ms_byte << 8) + (ls_byte & 0xff) as u16;
         self.write_word(Register::RANGE_CONFIG_B, ms_byte)?;
 
         Ok(())
@@ -500,14 +507,20 @@ impl Vl53l4cd {
 
     /// Begin ranging.
     #[inline]
-    pub fn start_ranging(&mut self) -> Result<(), LinuxI2CError> {
+    pub async fn start_ranging(&mut self) -> Result<(), LinuxI2CError> {
         if self.read_dword(Register::INTERMEASUREMENT_MS)? == 0 {
             // autonomous mode
-            self.write_byte(Register::SYSTEM_START, 0x21)
+            self.write_byte(Register::SYSTEM_START, 0x21)?;
         } else {
             // continuous mode
-            self.write_byte(Register::SYSTEM_START, 0x40)
+            self.write_byte(Register::SYSTEM_START, 0x40)?;
         }
+
+        while !self.has_measurement()? {
+            tokio::time::sleep(DATA_POLL_INTERVAL).await;
+        }
+
+        self.clear_interrupt()
     }
 
     /// Stop ranging.
