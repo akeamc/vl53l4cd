@@ -18,24 +18,39 @@
 //!         println!("{} mm", measurement.distance);
 //!     }
 //! }
-//! # Ok::<(), i2cdev::linux::LinuxI2CError>(())
+//! # Ok::<(), vl53l4cd::Error<i2cdev::linux::LinuxI2CError>>(())
 //! # });
 //! ```
 
 #![warn(missing_docs)]
-#![no_std]
 
 pub use i2cdev;
+use tokio::time::timeout;
 
 use core::time::Duration;
 
-use i2cdev::{
-    core::I2CDevice,
-    linux::{LinuxI2CDevice, LinuxI2CError},
-};
+use i2cdev::core::I2CDevice;
+
+/// VL53L4CD driver error. In order to get more details,
+/// make sure that the `tracing` feature is enabled.
+#[derive(Debug, thiserror::Error)]
+pub enum Error<E> {
+    /// I<sup>2</sup>C (I/O) error.
+    #[error("i2c error: {0}")]
+    I2C(#[from] E),
+
+    /// Invalid argument, often as a result of an I/O
+    /// error.
+    #[error("invalid argument")]
+    InvalidArgument,
+
+    /// Timeout waiting for the sensor.
+    #[error("timeout")]
+    Timeout,
+}
 
 #[cfg(feature = "tracing")]
-use tracing::{debug, instrument, trace};
+use tracing::{debug, error, instrument, trace};
 
 const DEFAULT_CONFIG_MSG: &[u8] = &[
     0x00, // first byte of register to write to
@@ -270,13 +285,13 @@ pub struct Measurement {
     /// return array, with no active photon emission, to
     /// measure the ambient signal rate due to noise.
     ///
-    /// The returned value is measured in thousand counts
-    /// per second (kcps) (10<sup>3</sup> * s<sup>-1</sup>).
+    /// The returned value is specified in thousand counts
+    /// per second (kcps).
     pub ambient_rate: u16,
     /// Number of detected photos during the VCSEL pulse.
     ///
-    /// The returned value is measured in thousand counts
-    /// per second (kcps) (10<sup>3</sup> * s<sup>-1</sup>).
+    /// The returned value is specified in thousand counts
+    /// per second (kcps).
     pub signal_rate: u16,
     /// Number of SPADs enabled for this measurement. Targets that
     /// are far away or have low reflectance will activate
@@ -296,31 +311,38 @@ impl Measurement {
 }
 
 /// A VL53L4CD ToF range sensor.
-pub struct Vl53l4cd {
-    i2c: LinuxI2CDevice,
+pub struct Vl53l4cd<I2C> {
+    i2c: I2C,
 }
 
-impl Vl53l4cd {
+impl<I2C> Vl53l4cd<I2C>
+where
+    I2C: I2CDevice,
+{
     /// Construct a new sensor, without sending
     /// any commands. To begin measuring, you
     /// need to call [`Self::init`] as well as
     /// [`Self::start_ranging`].
-    pub fn new(i2c: LinuxI2CDevice) -> Self {
+    pub const fn new(i2c: I2C) -> Self {
         Self { i2c }
     }
 
     // TODO: sync version of this
     /// Initialize the sensor.
     ///
-    /// # Panics
+    /// # Errors
     ///
     /// If the device id reported by the sensor isn't `0xebaa`, this
-    /// function panics. This is mostly done to prevent strange
-    /// I<sup>2</sup>C bugs where all returned bytes are zeroed.
+    /// function returns an error. This is mostly done to prevent
+    /// strange I<sup>2</sup>C bugs where all returned bytes are zeroed.
     #[cfg_attr(feature = "tracing", instrument(err, skip(self)))]
-    pub async fn init(&mut self) -> Result<(), LinuxI2CError> {
+    pub async fn init(&mut self) -> Result<(), Error<I2C::Error>> {
         let id = self.read_word(Register::IDENTIFICATION_MODEL_ID)?;
-        assert_eq!(id, 0xebaa, "strange device id ({:x})", id);
+        if id != 0xebaa {
+            #[cfg(feature = "tracing")]
+            error!("strange device id `{:#06x}`", id);
+            return Err(Error::InvalidArgument);
+        }
 
         #[cfg(feature = "tracing")]
         debug!("waiting for boot");
@@ -373,7 +395,7 @@ impl Vl53l4cd {
         &mut self,
         timing_budget_ms: u32,
         inter_measurement_ms: u32,
-    ) -> Result<(), LinuxI2CError> {
+    ) -> Result<(), Error<I2C::Error>> {
         assert!(
             (10..=200).contains(&timing_budget_ms),
             "timing budget must be in range [10, 200]"
@@ -381,7 +403,11 @@ impl Vl53l4cd {
 
         let osc_freq = u32::from(self.read_word(Register::OSC_FREQ)?);
 
-        assert_ne!(osc_freq, 0, "oscillation frequency is zero");
+        if osc_freq == 0 {
+            #[cfg(feature = "tracing")]
+            error!("oscillation frequency is zero");
+            return Err(Error::InvalidArgument);
+        }
 
         let mut timing_budget_us = timing_budget_ms * 1000;
         let macro_period_us = (2304 * (0x40000000 / osc_freq)) >> 6;
@@ -438,7 +464,7 @@ impl Vl53l4cd {
     /// until one is available, reads the measurement and finally clears
     /// the interrupt in order to request another measurement.
     #[cfg_attr(feature = "tracing", instrument(ret, skip(self)))]
-    pub async fn measure(&mut self) -> Result<Measurement, LinuxI2CError> {
+    pub async fn measure(&mut self) -> Result<Measurement, Error<I2C::Error>> {
         self.wait_for_measurement().await?;
 
         #[cfg(feature = "tracing")]
@@ -458,7 +484,7 @@ impl Vl53l4cd {
     /// > update needs to be applied to the sensor. This update needs to be performed when the temperature might have
     /// > changed by more than 8 degrees Celsius.
     #[cfg_attr(feature = "tracing", instrument(skip(self), ret))]
-    pub async fn start_temperature_update(&mut self) -> Result<(), LinuxI2CError> {
+    pub async fn start_temperature_update(&mut self) -> Result<(), Error<I2C::Error>> {
         self.write_byte(Register::VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND, 0x81)?;
         self.write_byte(Register::MYSTERY_1, 0x92)?;
         self.write_byte(Register::SYSTEM_START, 0x40)?;
@@ -475,21 +501,31 @@ impl Vl53l4cd {
 
     /// Poll the sensor until a measurement is ready.
     #[cfg_attr(feature = "tracing", instrument(skip(self)))]
-    pub async fn wait_for_measurement(&mut self) -> Result<(), LinuxI2CError> {
+    pub async fn wait_for_measurement(&mut self) -> Result<(), Error<I2C::Error>> {
         #[cfg(feature = "tracing")]
         debug!("waiting for measurement");
 
-        while !self.has_measurement()? {
-            tokio::time::sleep(Duration::from_millis(1)).await;
+        match timeout(Duration::from_secs(1), async move {
+            while !self.has_measurement()? {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            Ok(())
+        })
+        .await
+        {
+            Ok(res) => res,
+            Err(_) => {
+                #[cfg(feature = "tracing")]
+                error!("timeout waiting for measurement");
+                Err(Error::Timeout)
+            }
         }
-
-        Ok(())
     }
 
     /// Check if the sensor has a measurement ready. Unless you really like
     /// low-level, use the more ergonomic [`Self::measure`] instead.
     #[inline]
-    pub fn has_measurement(&mut self) -> Result<bool, LinuxI2CError> {
+    pub fn has_measurement(&mut self) -> Result<bool, Error<I2C::Error>> {
         let ctrl = self.read_byte(Register::GPIO_HV_MUX_CTRL)?;
         let status = self.read_byte(Register::GPIO_TIO_HV_STATUS)?;
         Ok(status & 1 != ctrl >> 4 & 1)
@@ -519,11 +555,11 @@ impl Vl53l4cd {
     ///
     ///     println!("{} mm", measurement.distance);
     /// }
-    /// # Ok::<(), i2cdev::linux::LinuxI2CError>(())
+    /// # Ok::<(), vl53l4cd::Error<i2cdev::linux::LinuxI2CError>>(())
     /// ```
     #[inline]
     #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self), ret, err))]
-    pub fn read_measurement(&mut self) -> Result<Measurement, LinuxI2CError> {
+    pub fn read_measurement(&mut self) -> Result<Measurement, Error<I2C::Error>> {
         let status = self.read_byte(Register::RESULT_RANGE_STATUS)? & 0x1f;
 
         Ok(Measurement {
@@ -539,14 +575,14 @@ impl Vl53l4cd {
     /// Clear the interrupt which will eventually trigger a new measurement.
     #[inline]
     #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self), ret, err))]
-    pub fn clear_interrupt(&mut self) -> Result<(), LinuxI2CError> {
+    pub fn clear_interrupt(&mut self) -> Result<(), Error<I2C::Error>> {
         self.write_byte(Register::SYSTEM_INTERRUPT_CLEAR, 0x01)
     }
 
     /// Begin ranging.
     #[inline]
     #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self), ret, err))]
-    pub async fn start_ranging(&mut self) -> Result<(), LinuxI2CError> {
+    pub async fn start_ranging(&mut self) -> Result<(), Error<I2C::Error>> {
         if self.read_dword(Register::INTERMEASUREMENT_MS)? == 0 {
             // autonomous mode
             self.write_byte(Register::SYSTEM_START, 0x21)?;
@@ -562,55 +598,58 @@ impl Vl53l4cd {
     /// Stop ranging.
     #[inline]
     #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self), ret, err))]
-    pub fn stop_ranging(&mut self) -> Result<(), LinuxI2CError> {
+    pub fn stop_ranging(&mut self) -> Result<(), Error<I2C::Error>> {
         self.write_byte(Register::SYSTEM_START, 0x00)
     }
 
     #[cfg_attr(feature = "tracing", instrument(level = "trace", skip(self, buf), fields(len = %buf.len())))]
-    fn read_bytes(&mut self, reg: Register, buf: &mut [u8]) -> Result<(), LinuxI2CError> {
+    fn read_bytes(&mut self, reg: Register, buf: &mut [u8]) -> Result<(), Error<I2C::Error>> {
         #[cfg(feature = "tracing")]
         trace!("write {:x?}", reg.as_bytes());
         self.i2c.write(&reg.as_bytes())?;
         #[cfg(feature = "tracing")]
         trace!("read {}", buf.len());
-        self.i2c.read(buf)
+        self.i2c.read(buf).map_err(Into::into)
     }
 
-    fn read_byte(&mut self, reg: Register) -> Result<u8, LinuxI2CError> {
+    fn read_byte(&mut self, reg: Register) -> Result<u8, Error<I2C::Error>> {
         let mut buf = [0];
         self.read_bytes(reg, &mut buf)?;
         Ok(u8::from_be_bytes(buf))
     }
 
-    fn read_word(&mut self, reg: Register) -> Result<u16, LinuxI2CError> {
+    fn read_word(&mut self, reg: Register) -> Result<u16, Error<I2C::Error>> {
         let mut buf = [0; 2];
         self.read_bytes(reg, &mut buf)?;
         Ok(u16::from_be_bytes(buf))
     }
 
-    fn read_dword(&mut self, reg: Register) -> Result<u32, LinuxI2CError> {
+    fn read_dword(&mut self, reg: Register) -> Result<u32, Error<I2C::Error>> {
         let mut buf = [0; 4];
         self.read_bytes(reg, &mut buf)?;
         Ok(u32::from_be_bytes(buf))
     }
 
-    fn write_byte(&mut self, reg: Register, data: u8) -> Result<(), LinuxI2CError> {
+    fn write_byte(&mut self, reg: Register, data: u8) -> Result<(), Error<I2C::Error>> {
         let mut msg = [0, 0, data];
         msg[..2].copy_from_slice(&reg.as_bytes());
-        self.i2c.write(&msg)
+        self.i2c.write(&msg)?;
+        Ok(())
     }
 
-    fn write_word(&mut self, reg: Register, data: u16) -> Result<(), LinuxI2CError> {
+    fn write_word(&mut self, reg: Register, data: u16) -> Result<(), Error<I2C::Error>> {
         let mut msg = [0; 4];
         msg[..2].copy_from_slice(&reg.as_bytes());
         msg[2..].copy_from_slice(&data.to_be_bytes());
-        self.i2c.write(&msg)
+        self.i2c.write(&msg)?;
+        Ok(())
     }
 
-    fn write_dword(&mut self, reg: Register, data: u32) -> Result<(), LinuxI2CError> {
+    fn write_dword(&mut self, reg: Register, data: u32) -> Result<(), Error<I2C::Error>> {
         let mut msg = [0; 6];
         msg[..2].copy_from_slice(&reg.as_bytes());
         msg[2..].copy_from_slice(&data.to_be_bytes());
-        self.i2c.write(&msg)
+        self.i2c.write(&msg)?;
+        Ok(())
     }
 }
