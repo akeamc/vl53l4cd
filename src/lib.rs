@@ -187,7 +187,7 @@ impl Register {
 /// Default I<sup>2</sup>C address of the VL53L4CD.
 pub const PERIPHERAL_ADDR: u16 = 0x29;
 
-/// A measurement status.
+/// Measurement status as per the user manual.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
 pub enum Status {
@@ -327,7 +327,6 @@ where
         Self { i2c }
     }
 
-    // TODO: sync version of this
     /// Initialize the sensor.
     ///
     /// # Errors
@@ -401,7 +400,7 @@ where
             "timing budget must be in range [10, 200]"
         );
 
-        let osc_freq = u32::from(self.read_word(Register::OSC_FREQ)?);
+        let osc_freq = self.read_word(Register::OSC_FREQ)?;
 
         if osc_freq == 0 {
             #[cfg(feature = "tracing")]
@@ -410,7 +409,6 @@ where
         }
 
         let mut timing_budget_us = timing_budget_ms * 1000;
-        let macro_period_us = (2304 * (0x40000000 / osc_freq)) >> 6;
 
         if inter_measurement_ms == 0 {
             // continuous mode
@@ -431,30 +429,10 @@ where
             timing_budget_us /= 2;
         }
 
-        // reg a
-        let mut ms_byte = 0;
-        timing_budget_us <<= 12;
-        let mut tmp = macro_period_us * 16;
-        let mut ls_byte = ((timing_budget_us + ((tmp >> 6) >> 1)) / (tmp >> 6)) - 1;
+        let (a, b) = range_config_values(timing_budget_us, osc_freq);
 
-        while (ls_byte & 0xFFFFFF00) > 0 {
-            ls_byte >>= 1;
-            ms_byte += 1;
-        }
-        ms_byte = (ms_byte << 8) + (ls_byte & 0xff) as u16;
-        self.write_word(Register::RANGE_CONFIG_A, ms_byte)?;
-
-        // reg b
-        ms_byte = 0;
-        tmp = macro_period_us * 12;
-        let mut ls_byte = ((timing_budget_us + ((tmp >> 6) >> 1)) / (tmp >> 6)) - 1;
-
-        while (ls_byte & 0xFFFFFF00) > 0 {
-            ls_byte >>= 1;
-            ms_byte += 1;
-        }
-        ms_byte = (ms_byte << 8) + (ls_byte & 0xff) as u16;
-        self.write_word(Register::RANGE_CONFIG_B, ms_byte)?;
+        self.write_word(Register::RANGE_CONFIG_A, a)?;
+        self.write_word(Register::RANGE_CONFIG_B, b)?;
 
         Ok(())
     }
@@ -602,7 +580,7 @@ where
         self.write_byte(Register::SYSTEM_START, 0x00)
     }
 
-    #[cfg_attr(feature = "tracing", instrument(level = "trace", skip(self, buf), fields(len = %buf.len())))]
+    #[cfg_attr(feature = "tracing", instrument(level = "trace", skip(self, buf), fields(len = %buf.len()), ret, err))]
     fn read_bytes(&mut self, reg: Register, buf: &mut [u8]) -> Result<(), Error<I2C::Error>> {
         #[cfg(feature = "tracing")]
         trace!("write {:x?}", reg.as_bytes());
@@ -630,26 +608,72 @@ where
         Ok(u32::from_be_bytes(buf))
     }
 
+    #[cfg_attr(feature = "tracing", instrument(level = "trace", skip(self), err))]
     fn write_byte(&mut self, reg: Register, data: u8) -> Result<(), Error<I2C::Error>> {
         let mut msg = [0, 0, data];
         msg[..2].copy_from_slice(&reg.as_bytes());
+        #[cfg(feature = "tracing")]
+        trace!("write {:x?}", msg);
         self.i2c.write(&msg)?;
         Ok(())
     }
 
+    #[cfg_attr(feature = "tracing", instrument(level = "trace", skip(self), err))]
     fn write_word(&mut self, reg: Register, data: u16) -> Result<(), Error<I2C::Error>> {
         let mut msg = [0; 4];
         msg[..2].copy_from_slice(&reg.as_bytes());
         msg[2..].copy_from_slice(&data.to_be_bytes());
+        #[cfg(feature = "tracing")]
+        trace!("write {:x?}", msg);
         self.i2c.write(&msg)?;
         Ok(())
     }
 
+    #[cfg_attr(feature = "tracing", instrument(level = "trace", skip(self), err))]
     fn write_dword(&mut self, reg: Register, data: u32) -> Result<(), Error<I2C::Error>> {
         let mut msg = [0; 6];
         msg[..2].copy_from_slice(&reg.as_bytes());
         msg[2..].copy_from_slice(&data.to_be_bytes());
+        #[cfg(feature = "tracing")]
+        trace!("write {:x?}", msg);
         self.i2c.write(&msg)?;
         Ok(())
+    }
+}
+
+/// Calculate valid values for [`Register::RANGE_CONFIG_A`] and
+/// [`Register::RANGE_CONFIG_B`].
+fn range_config_values(mut timing_budget_us: u32, osc_freq: u16) -> (u16, u16) {
+    // I didn't make these values up because I'm not a wizard.
+    // https://github.com/stm32duino/VL53L4CD/blob/b64ff4fa877c3cf156e11639e5fa305208dd3be9/src/vl53l4cd_api.cpp#L370
+
+    let macro_period_us = (2304 * (0x40000000 / u32::from(osc_freq))) >> 6;
+    timing_budget_us <<= 12;
+
+    let y = |x: u32| {
+        let mut ms_byte = 0;
+        let tmp = macro_period_us * x;
+        let mut ls_byte = ((timing_budget_us + (tmp >> 7)) / (tmp >> 6)) - 1;
+
+        while (ls_byte & 0xffffff00) > 0 {
+            ls_byte >>= 1;
+            ms_byte += 1;
+        }
+
+        (ms_byte << 8) | (ls_byte & 0xff) as u16
+    };
+
+    (y(16), y(12))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::range_config_values;
+
+    #[test]
+    fn range_config() {
+        let (a, b) = range_config_values(197500, 0xbc7a);
+        assert_eq!(a, 0x04fc);
+        assert_eq!(b, 0x05a8);
     }
 }
