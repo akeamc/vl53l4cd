@@ -13,6 +13,8 @@ tokio = { version = "1.20.0", features = ["time"] }
 tracing = { version = "0.1.35", optional = true }
 
 [dev-dependencies]
+anyhow = "1.0.65"
+tokio = { version = "1.20.0", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.2"
 
 [features]
