@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
     let mut vl53 = Vl53l4cd::new(dev);
 
     vl53.init().await?;
-    vl53.set_range_timing(200, 0)?;
+    vl53.set_range_timing(200, 0).await?;
     vl53.start_ranging().await?;
 
     loop {
