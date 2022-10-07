@@ -1,23 +1,31 @@
-use core::future::{self, Future};
+//! [I²C](https://en.wikipedia.org/wiki/I%C2%B2C) abstractions.
+
+use core::{future, mem};
 #[cfg(feature = "tracing")]
 use tracing::{instrument, trace};
 
 use crate::Register;
 
-pub trait I2c {
+/// A simple async I²C trait.
+pub trait Device {
+    /// I/O error for the I²C implementation.
     type Error;
 
-    type Read: Future<Output = Result<(), Self::Error>>;
+    /// [`Future`] returned by [`Self::read`].
+    type Read: future::Future<Output = Result<(), Self::Error>>;
 
-    type Write: Future<Output = Result<(), Self::Error>>;
+    /// [`Future`] returned by [`Self::write`].
+    type Write: future::Future<Output = Result<(), Self::Error>>;
 
+    /// Read some bytes into a buffer.
     fn read(&mut self, dest: &mut [u8]) -> Self::Read;
 
+    /// Write bytes.
     fn write(&mut self, data: &[u8]) -> Self::Write;
 }
 
 #[inline]
-pub(crate) async fn read_bytes<D: I2c>(
+pub(crate) async fn read_bytes<D: Device>(
     i2c: &mut D,
     reg: Register,
     dest: &mut [u8],
@@ -34,26 +42,36 @@ pub(crate) async fn read_bytes<D: I2c>(
 }
 
 macro_rules! read_impl {
-    ($name:ident, $out:ty, $bytes:literal) => {
+    ($name:ident, $out:ty) => {
         #[inline]
-        pub async fn $name<D: I2c>(i2c: &mut D, reg: Register) -> Result<$out, D::Error> {
-            let mut buf = [0; $bytes];
+        /// Read a
+        #[doc = concat!("[`", stringify!($out), "`]")]
+        /// from some [`Register`].
+        pub async fn $name<D: Device>(i2c: &mut D, reg: Register) -> Result<$out, D::Error> {
+            let mut buf = [0; mem::size_of::<$out>()];
             read_bytes(i2c, reg, &mut buf).await?;
             Ok(<$out>::from_be_bytes(buf))
         }
     };
 }
 
-read_impl!(read_byte, u8, 1);
-read_impl!(read_word, u16, 2);
-read_impl!(read_dword, u32, 4);
+read_impl!(read_byte, u8);
+read_impl!(read_word, u16);
+read_impl!(read_dword, u32);
 
 macro_rules! write_impl {
-    ($name:ident, $in:ty, $bytes:literal) => {
+    ($name:ident, $in:ty) => {
         #[cfg_attr(feature = "tracing", instrument(level = "trace", skip(i2c)))]
         #[inline]
-        pub async fn $name<D: I2c>(i2c: &mut D, reg: Register, data: $in) -> Result<(), D::Error> {
-            let mut msg = [0; 2 + $bytes]; // 2 bytes for register selection, rest for data
+        /// Write a
+        #[doc = concat!("[`", stringify!($in), "`]")]
+        /// into some [`Register`].
+        pub async fn $name<D: Device>(
+            i2c: &mut D,
+            reg: Register,
+            data: $in,
+        ) -> Result<(), D::Error> {
+            let mut msg = [0; 2 + mem::size_of::<$in>()]; // 2 bytes for register selection, rest for data
             msg[..2].copy_from_slice(&reg.as_bytes());
             msg[2..].copy_from_slice(&data.to_be_bytes());
             #[cfg(feature = "tracing")]
@@ -64,12 +82,12 @@ macro_rules! write_impl {
     };
 }
 
-write_impl!(write_byte, u8, 1);
-write_impl!(write_word, u16, 2);
-write_impl!(write_dword, u32, 4);
+write_impl!(write_byte, u8);
+write_impl!(write_word, u16);
+write_impl!(write_dword, u32);
 
 #[cfg(feature = "i2cdev")]
-impl<D> I2c for D
+impl<D> Device for D
 where
     D: i2cdev::core::I2CDevice,
 {

@@ -11,7 +11,7 @@ pub mod i2c;
 
 use core::fmt::Debug;
 
-use i2c::{read_dword, write_byte, I2c};
+use i2c::{read_dword, write_byte, Device};
 
 #[cfg(feature = "i2cdev")]
 pub use i2cdev;
@@ -118,12 +118,16 @@ const DEFAULT_CONFIG_MSG: &[u8] = &[
     0x00, // 0x87 : ranging, 0x00=stop, 0x40=start
 ];
 
+/// A register on the device, identified by a 16-bit address.
 #[derive(Debug, Clone, Copy)]
 #[allow(non_camel_case_types)]
+#[allow(missing_docs)]
 pub enum Register {
     OSC_FREQ = 0x0006,
     VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND = 0x0008,
+    /// This name is temporary.
     MYSTERY_1 = 0x000b,
+    /// This name is also temporary.
     MYSTERY_2 = 0x0024,
     SYSTEM_START = 0x0087,
     GPIO_HV_MUX_CTRL = 0x0030,
@@ -144,16 +148,23 @@ pub enum Register {
 }
 
 impl Register {
-    const fn addr(&self) -> u16 {
+    /// Get the 16-bit address of the register.
+    ///
+    /// ```
+    /// # use vl53l4cd::Register;
+    /// assert_eq!(0x010f, Register::IDENTIFICATION_MODEL_ID.addr());
+    /// ```
+    pub const fn addr(&self) -> u16 {
         *self as u16
     }
 
-    const fn as_bytes(&self) -> [u8; 2] {
+    /// Get the big-endian bytes of the register address.
+    pub const fn as_bytes(&self) -> [u8; 2] {
         self.addr().to_be_bytes()
     }
 }
 
-/// Default I<sup>2</sup>C address of the VL53L4CD.
+/// Default I²C address of the VL53L4CD.
 pub const PERIPHERAL_ADDR: u16 = 0x29;
 
 /// Measurement status as per the user manual.
@@ -286,7 +297,7 @@ pub struct Vl53l4cd<I2C> {
 
 impl<I2C> Vl53l4cd<I2C>
 where
-    I2C: I2c,
+    I2C: Device,
 {
     /// Construct a new sensor, without sending
     /// any commands. To begin measuring, you
@@ -302,7 +313,7 @@ where
     ///
     /// If the device id reported by the sensor isn't `0xebaa`, this
     /// function returns an error. This is mostly done to prevent
-    /// strange I<sup>2</sup>C bugs where all returned bytes are zeroed.
+    /// strange I²C bugs where all returned bytes are zeroed.
     #[cfg_attr(feature = "tracing", instrument(skip(self)))]
     pub async fn init(&mut self) -> Result<(), Error<I2C::Error>> {
         let id = read_word(&mut self.i2c, Register::IDENTIFICATION_MODEL_ID).await?;
@@ -584,7 +595,7 @@ where
 
 /// Calculate valid values for [`Register::RANGE_CONFIG_A`] and
 /// [`Register::RANGE_CONFIG_B`].
-fn range_config_values(mut timing_budget_us: u32, osc_freq: u16) -> (u16, u16) {
+pub fn range_config_values(mut timing_budget_us: u32, osc_freq: u16) -> (u16, u16) {
     // I didn't make these values up because I'm not a wizard.
     // https://github.com/stm32duino/VL53L4CD/blob/b64ff4fa877c3cf156e11639e5fa305208dd3be9/src/vl53l4cd_api.cpp#L370
 
@@ -611,7 +622,7 @@ fn range_config_values(mut timing_budget_us: u32, osc_freq: u16) -> (u16, u16) {
 /// make sure that the `tracing` feature is enabled.
 #[derive(Debug)]
 pub enum Error<E> {
-    /// I<sup>2</sup>C (I/O) error.
+    /// I²C (I/O) error.
     I2C(E),
 
     /// Invalid argument, often as a result of an I/O
