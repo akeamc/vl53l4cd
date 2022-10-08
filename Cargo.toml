@@ -7,10 +7,9 @@ license = "MIT"
 repository = "https://github.com/akeamc/vl53l4cd"
 
 [dependencies]
-i2cdev = "0.5.1"
-thiserror = "1.0.31"
-tokio = { version = "1.20.0", features = ["time"] }
-tracing = { version = "0.1.35", optional = true }
+i2cdev = { version = "0.5.1", optional = true }
+tokio = { version = "1.20.0", features = ["time"], optional = true }
+tracing = { version = "0.1.35", optional = true, default-features = false, features = ["attributes"] }
 
 [dev-dependencies]
 anyhow = "1.0.65"
@@ -18,3 +17,9 @@ tokio = { version = "1.20.0", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.2"
 
 [features]
+std = ["tracing/std"]
+default = ["std"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
