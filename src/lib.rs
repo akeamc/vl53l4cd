@@ -1,7 +1,7 @@
 //! Async driver for the [VL53L4CD ToF distance sensor](https://www.st.com/en/imaging-and-photonics-solutions/vl53l4cd.html).
 //!
 //! ```no_run
-#![doc = include_str!("../examples/pi/src/main.rs")]
+#![doc = include_str!("../examples/linux.rs")]
 //! ```
 
 #![warn(missing_docs)]
@@ -11,17 +11,15 @@ pub mod i2c;
 
 use core::fmt::Debug;
 
-use i2c::{read_dword, write_byte, Device};
-
 #[cfg(feature = "i2cdev")]
 pub use i2cdev;
 
 #[cfg(feature = "tracing")]
 use tracing::{debug, error, instrument};
 
-use crate::i2c::{read_byte, read_word, write_dword, write_word};
+use crate::i2c::{read_byte, read_word, write_dword, write_word, write_byte};
 
-const DEFAULT_CONFIG_MSG: &[u8] = &[
+pub(crate) const DEFAULT_CONFIG_MSG: &[u8] = &[
     0x00, // first byte of register to write to
     0x2d, // second byte of register to write to
     // value    addr : description
@@ -297,7 +295,7 @@ pub struct Vl53l4cd<I2C> {
 
 impl<I2C> Vl53l4cd<I2C>
 where
-    I2C: Device,
+    I2C: i2c::Device,
 {
     /// Construct a new sensor, without sending
     /// any commands. To begin measuring, you
@@ -522,28 +520,24 @@ where
     /// Read the current measurement from the sensor. Wait for
     /// [`Self::has_measurement`] to return true before running this so that
     /// the measurement doesn't get overwritten halfway through you reading it.
-    /// Instruct the sensor to resume measuring with  [`Self::clear_interrupt`]
+    /// Instruct the sensor to resume measuring with [`Self::clear_interrupt`]
     /// afterwards.
     ///
     /// ```no_run
-    /// # use vl53l4cd::Vl53l4cd;
-    /// # use i2cdev::linux::LinuxI2CDevice;
-    /// # use std::{thread::sleep, time::Duration};
+    /// # use vl53l4cd::{Vl53l4cd, i2c};
     /// #
-    /// # let dev = LinuxI2CDevice::new("/dev/i2c-1", vl53l4cd::PERIPHERAL_ADDR)?;
-    /// # let mut vl53 = Vl53l4cd::new(dev);
-    /// #
+    /// # tokio_test::block_on(async {
+    /// # let mut vl53 = Vl53l4cd::new(i2c::Mock::default());
     /// loop {
-    ///     while !vl53.has_measurement()? {
-    ///         sleep(Duration::from_millis(1));
-    ///     }
+    ///     while !vl53.has_measurement().await? { }
     ///
-    ///     let measurement = vl53.read_measurement()?;
-    ///     vl53.clear_interrupt()?;
+    ///     let measurement = vl53.read_measurement().await?;
+    ///     vl53.clear_interrupt().await?;
     ///
     ///     println!("{} mm", measurement.distance);
     /// }
-    /// # Ok::<(), vl53l4cd::Error<i2cdev::linux::LinuxI2CError>>(())
+    /// # Ok::<(), vl53l4cd::Error<<i2c::Mock as i2c::Device>::Error>>(())
+    /// # });
     /// ```
     #[inline]
     #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self)))]
@@ -572,7 +566,7 @@ where
     #[inline]
     #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self)))]
     pub async fn start_ranging(&mut self) -> Result<(), Error<I2C::Error>> {
-        if read_dword(&mut self.i2c, Register::INTERMEASUREMENT_MS).await? == 0 {
+        if read_word(&mut self.i2c, Register::INTERMEASUREMENT_MS).await? == 0 {
             // autonomous mode
             write_byte(&mut self.i2c, Register::SYSTEM_START, 0x21).await?;
         } else {

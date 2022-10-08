@@ -19,3 +19,7 @@ tokio-test = "0.4.2"
 [features]
 std = ["tracing/std"]
 default = ["std"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

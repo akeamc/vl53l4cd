@@ -11,10 +11,10 @@ pub trait Device {
     /// I/O error for the I²C implementation.
     type Error;
 
-    /// [`Future`] returned by [`Self::read`].
+    /// [`Future`](future::Future) returned by [`Self::read`].
     type Read: future::Future<Output = Result<(), Self::Error>>;
 
-    /// [`Future`] returned by [`Self::write`].
+    /// [`Future`](future::Future) returned by [`Self::write`].
     type Write: future::Future<Output = Result<(), Self::Error>>;
 
     /// Read some bytes into a buffer.
@@ -103,5 +103,25 @@ where
 
     fn write(&mut self, data: &[u8]) -> Self::Write {
         future::ready(self.write(data))
+    }
+}
+
+/// A mocked VL53L4CD I²C bus.
+#[derive(Default)]
+pub struct Mock;
+
+impl Device for Mock {
+    type Error = ();
+
+    type Read = future::Ready<Result<(), Self::Error>>;
+
+    type Write = future::Ready<Result<(), Self::Error>>;
+
+    fn read(&mut self, _dest: &mut [u8]) -> Self::Read {
+        todo!()
+    }
+
+    fn write(&mut self, _data: &[u8]) -> Self::Write {
+        todo!()
     }
 }
