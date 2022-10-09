@@ -17,7 +17,7 @@ pub use i2cdev;
 #[cfg(feature = "tracing")]
 use tracing::{debug, error, instrument};
 
-use crate::i2c::{read_byte, read_word, write_dword, write_word, write_byte};
+use crate::i2c::{read_byte, read_word, write_byte, write_dword, write_word};
 
 pub(crate) const DEFAULT_CONFIG_MSG: &[u8] = &[
     0x00, // first byte of register to write to
@@ -369,10 +369,12 @@ where
     ///
     /// Panics if the timing budget is less than 10 ms or more than 200 ms,
     /// or if the timing budget is less than the inter-measurement time
-    /// (except for then the inter-measurement time is zero).
+    /// (except when the inter-measurement time is zero).
     ///
     /// If the oscillation frequency reported by the sensor (2 bytes starting
-    /// at register `0x0006`) is zero, this function panics.
+    /// at [`OSC_FREQ`]) is zero, this function panics.
+    ///
+    /// [`OSC_FREQ`]: Register#variant.OSC_FREQ
     #[cfg_attr(feature = "tracing", instrument(level = "debug", skip(self)))]
     pub async fn set_range_timing(
         &mut self,
@@ -589,6 +591,13 @@ where
 
 /// Calculate valid values for [`Register::RANGE_CONFIG_A`] and
 /// [`Register::RANGE_CONFIG_B`].
+///
+/// ```
+/// let (a, b) = vl53l4cd::range_config_values(197500, 48250);
+///
+/// assert_eq!(a, 0x04fc);
+/// assert_eq!(b, 0x05a8);
+/// ```
 pub fn range_config_values(mut timing_budget_us: u32, osc_freq: u16) -> (u16, u16) {
     // I didn't make these values up because I'm not a wizard.
     // https://github.com/stm32duino/VL53L4CD/blob/b64ff4fa877c3cf156e11639e5fa305208dd3be9/src/vl53l4cd_api.cpp#L370
@@ -596,7 +605,7 @@ pub fn range_config_values(mut timing_budget_us: u32, osc_freq: u16) -> (u16, u1
     let macro_period_us = (2304 * (0x40000000 / u32::from(osc_freq))) >> 6;
     timing_budget_us <<= 12;
 
-    let y = |x: u32| {
+    let f = |x: u32| {
         let mut ms_byte = 0;
         let tmp = macro_period_us * x;
         let mut ls_byte = ((timing_budget_us + (tmp >> 7)) / (tmp >> 6)) - 1;
@@ -609,7 +618,7 @@ pub fn range_config_values(mut timing_budget_us: u32, osc_freq: u16) -> (u16, u1
         (ms_byte << 8) | (ls_byte & 0xff) as u16
     };
 
-    (y(16), y(12))
+    (f(16), f(12))
 }
 
 /// VL53L4CD driver error. In order to get more details,
@@ -646,15 +655,3 @@ impl<E> std::fmt::Display for Error<E> {
 
 #[cfg(feature = "std")]
 impl<E> std::error::Error for Error<E> where E: Debug {}
-
-#[cfg(test)]
-mod tests {
-    use crate::range_config_values;
-
-    #[test]
-    fn range_config() {
-        let (a, b) = range_config_values(197500, 0xbc7a);
-        assert_eq!(a, 0x04fc);
-        assert_eq!(b, 0x05a8);
-    }
-}
