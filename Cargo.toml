@@ -1,23 +1,20 @@
 [package]
 name = "vl53l4cd"
 description = "VL53L4CD ToF ranging sensor driver"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/akeamc/vl53l4cd"
 
 [dependencies]
-i2cdev = { version = "0.5.1", optional = true }
-tokio = { version = "1.20.0", features = ["time"], optional = true }
-tracing = { version = "0.1.35", optional = true, default-features = false, features = ["attributes"] }
+defmt = { version = "0.3", optional = true }
+embedded-hal-async = "1.0"
 
 [dev-dependencies]
-anyhow = "1.0.65"
-tokio = { version = "1.20.0", features = ["macros", "rt-multi-thread"] }
-tokio-test = "0.4.2"
+anyhow = "1"
 
 [features]
-std = ["tracing/std"]
+std = []
 default = ["std"]
 
 [package.metadata.docs.rs]
