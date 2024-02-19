@@ -111,6 +111,7 @@ pub(crate) const DEFAULT_CONFIG_MSG: &[u8] = &[
 #[derive(Debug, Clone, Copy)]
 #[allow(non_camel_case_types)]
 #[allow(missing_docs)]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 pub enum Register {
     OSC_FREQ = 0x0006,
     VHV_CONFIG_TIMEOUT_MACROP_LOOP_BOUND = 0x0008,
@@ -158,6 +159,7 @@ pub const PERIPHERAL_ADDR: u8 = 0x52;
 
 /// Measurement status as per the user manual.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 #[repr(u8)]
 pub enum Status {
     /// Returned distance is valid.
@@ -192,6 +194,7 @@ pub enum Status {
 
 /// Severity of a measurement status.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 pub enum Severity {
     /// The measurement is completely valid.
     None,
@@ -245,6 +248,7 @@ impl Status {
 
 /// A VL53L4CD measurement.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "defmt-03", derive(defmt::Format))]
 pub struct Measurement {
     /// Validity of the measurement.
     pub status: Status,
