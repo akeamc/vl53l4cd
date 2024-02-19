@@ -594,7 +594,7 @@ pub fn range_config_values(mut timing_budget_us: u32, osc_freq: u16) -> (u16, u1
 }
 
 /// VL53L4CD driver error. In order to get more details,
-/// enable the `defmt` feature.
+/// enable the `defmt-03` feature.
 #[derive(Debug)]
 pub enum Error<E> {
     /// I²C (I/O) error.
