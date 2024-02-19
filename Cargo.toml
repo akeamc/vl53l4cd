@@ -10,6 +10,7 @@ repository = "https://github.com/akeamc/vl53l4cd"
 [dependencies]
 defmt = { version = "0.3", optional = true }
 embedded-hal-async = "1.0"
+futures-util = { version = "0.3", default-features = false }
 
 [features]
 defmt-03 = ["dep:defmt", "embedded-hal-async/defmt-03"]

@@ -1,9 +1,16 @@
 //! Async driver for the [VL53L4CD ToF distance sensor](https://www.st.com/en/imaging-and-photonics-solutions/vl53l4cd.html).
+//!
+//! This crate is very much a port of the [STM32Duino VL53L4CD library](https://github.com/stm32duino/VL53L4CD).
+//!
+//! [Datasheet](https://www.st.com/resource/en/datasheet/vl53l4cd.pdf)
 
 #![warn(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 mod i2c;
+pub mod wait;
+
+use wait::WaitForMeasurement;
 
 use core::fmt;
 
@@ -155,7 +162,7 @@ impl Register {
 }
 
 /// Default I²C address of the VL53L4CD.
-pub const PERIPHERAL_ADDR: u8 = 0x52;
+pub const PERIPHERAL_ADDR: u8 = 0x29;
 
 /// Measurement status as per the user manual.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -283,27 +290,29 @@ impl Measurement {
 }
 
 /// A VL53L4CD ToF range sensor.
-pub struct Vl53l4cd<I2C, T> {
+pub struct Vl53l4cd<I2C, DELAY, WAIT> {
     i2c: Device<I2C>,
-    timer: T,
+    delay: DELAY,
+    wait: WAIT,
 }
 
-impl<I2C: I2c, T: DelayNs> Vl53l4cd<I2C, T> {
+impl<I2C: I2c, DELAY: DelayNs, WAIT: WaitForMeasurement<I2C, DELAY>> Vl53l4cd<I2C, DELAY, WAIT> {
     /// Construct a new sensor with the default I²C address.
     ///
     /// See [`Vl53l4cd::with_addr`] and [`PERIPHERAL_ADDR`].
-    pub const fn new(bus: I2C, timer: T) -> Self {
-        Self::with_addr(bus, PERIPHERAL_ADDR, timer)
+    pub const fn new(bus: I2C, delay: DELAY, wait: WAIT) -> Self {
+        Self::with_addr(bus, PERIPHERAL_ADDR, delay, wait)
     }
 
     /// Construct a new sensor, without sending
     /// any commands. To begin measuring, you
     /// need to call [`Vl53l4cd::init`] as well as
     /// [`Vl53l4cd::start_ranging`].
-    pub const fn with_addr(bus: I2C, addr: u8, timer: T) -> Self {
+    pub const fn with_addr(bus: I2C, addr: u8, delay: DELAY, wait: WAIT) -> Self {
         Self {
             i2c: Device { addr, bus },
-            timer,
+            delay,
+            wait,
         }
     }
 
@@ -354,7 +363,7 @@ impl<I2C: I2c, T: DelayNs> Vl53l4cd<I2C, T> {
             if self.i2c.read_byte(Register::SYSTEM_STATUS).await? == 0x3 {
                 return Ok(());
             }
-            self.timer.delay_ms(1).await;
+            self.delay.delay_ms(1).await;
         }
 
         #[cfg(feature = "defmt-03")]
@@ -487,27 +496,20 @@ impl<I2C: I2c, T: DelayNs> Vl53l4cd<I2C, T> {
     }
 
     /// Poll the sensor until a measurement is ready.
+    #[inline]
     pub async fn wait_for_measurement(&mut self) -> Result<(), Error<I2C::Error>> {
         #[cfg(feature = "defmt-03")]
         defmt::debug!("waiting for measurement");
 
-        for _ in 0u16..1000 {
-            if self.has_measurement().await? {
-                return Ok(());
-            }
-            self.timer.delay_ms(1).await;
-        }
-
-        #[cfg(feature = "defmt-03")]
-        defmt::error!("timeout waiting for measurement");
-        Err(Error::Timeout)
+        self.wait
+            .wait_for_measurement(&mut self.i2c, &mut self.delay)
+            .await
     }
 
     /// Check if the sensor has a measurement ready.
+    #[inline]
     pub async fn has_measurement(&mut self) -> Result<bool, Error<I2C::Error>> {
-        let ctrl = self.i2c.read_byte(Register::GPIO_HV_MUX_CTRL).await?;
-        let status = self.i2c.read_byte(Register::GPIO_TIO_HV_STATUS).await?;
-        Ok(status & 1 != ctrl >> 4 & 1)
+        Ok(wait::has_measurement(&mut self.i2c).await?)
     }
 
     /// *Use [`Vl53l4cd::measure`] unless you really like low-level.*
@@ -598,6 +600,9 @@ pub enum Error<E> {
     /// I²C (I/O) error.
     I2c(E),
 
+    /// GPIO error.
+    Gpio,
+
     /// Invalid argument, often as a result of an I/O
     /// error.
     InvalidArgument,
@@ -616,6 +621,7 @@ impl<E: embedded_hal_async::i2c::Error> fmt::Display for Error<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::I2c(err) => write!(f, "i2c error: {}", err.kind()),
+            Error::Gpio => write!(f, "gpio error"),
             Error::InvalidArgument => write!(f, "invalid argument"),
             Error::Timeout => write!(f, "timeout"),
         }
