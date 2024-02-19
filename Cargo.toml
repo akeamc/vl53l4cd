@@ -10,10 +10,8 @@ repository = "https://github.com/akeamc/vl53l4cd"
 defmt = { version = "0.3", optional = true }
 embedded-hal-async = "1.0"
 
-[dev-dependencies]
-anyhow = "1"
-
 [features]
+defmt-03 = ["dep:defmt", "embedded-hal-async/defmt-03"]
 std = []
 default = ["std"]
 
