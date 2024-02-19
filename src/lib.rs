@@ -14,7 +14,7 @@ use wait::WaitForMeasurement;
 
 use core::fmt;
 
-use embedded_hal_async::{delay::DelayNs, i2c::I2c};
+use embedded_hal_async::{delay::DelayNs, i2c::{I2c, SevenBitAddress}};
 use i2c::Device;
 
 pub(crate) const DEFAULT_CONFIG_MSG: &[u8] = &[
@@ -161,8 +161,16 @@ impl Register {
     }
 }
 
-/// Default I²C address of the VL53L4CD.
-pub const PERIPHERAL_ADDR: u8 = 0x29;
+/// Default I²C address of the VL53L4CD in **right-aligned** 7-bit format.
+///
+/// Note that the datasheet specifies the address as `0x52`, which is the
+/// left-aligned form.
+///
+/// See [`SevenBitAddress`] for more information on bit alignment.
+pub const ADDRESS: SevenBitAddress = 0x29;
+
+/// Device ID of the VL53L4CD.
+pub const DEVICE_ID: u16 = 0xebaa;
 
 /// Measurement status as per the user manual.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -299,9 +307,9 @@ pub struct Vl53l4cd<I2C, DELAY, WAIT> {
 impl<I2C: I2c, DELAY: DelayNs, WAIT: WaitForMeasurement<I2C, DELAY>> Vl53l4cd<I2C, DELAY, WAIT> {
     /// Construct a new sensor with the default I²C address.
     ///
-    /// See [`Vl53l4cd::with_addr`] and [`PERIPHERAL_ADDR`].
+    /// See [`Vl53l4cd::with_addr`] and [`ADDRESS`].
     pub const fn new(bus: I2C, delay: DELAY, wait: WAIT) -> Self {
-        Self::with_addr(bus, PERIPHERAL_ADDR, delay, wait)
+        Self::with_addr(bus, ADDRESS, delay, wait)
     }
 
     /// Construct a new sensor, without sending
@@ -320,15 +328,14 @@ impl<I2C: I2c, DELAY: DelayNs, WAIT: WaitForMeasurement<I2C, DELAY>> Vl53l4cd<I2
     ///
     /// # Errors
     ///
-    /// If the device id reported by the sensor isn't `0xebaa`, this
-    /// function returns an error. This is mostly done to prevent
-    /// strange I²C bugs where all returned bytes are zeroed.
+    /// If the device id reported by the sensor isn't [`DEVICE_ID`], this
+    /// function returns an error.
     pub async fn init(&mut self) -> Result<(), Error<I2C::Error>> {
         let id = self
             .i2c
             .read_word(Register::IDENTIFICATION_MODEL_ID)
             .await?;
-        if id != 0xebaa {
+        if id != DEVICE_ID {
             #[cfg(feature = "defmt-03")]
             defmt::error!("strange device id {:#06x}", id);
             return Err(Error::InvalidArgument);
