@@ -25,7 +25,7 @@ async fn main(_spawner: Spawner) {
     let mut vl53 = Vl53l4cd::new(
         i2c,
         embassy_time::Delay,
-        vl53l4cd::Interrupt(Input::new(p.PIN_5, Pull::Up)), // or vl53l4cd::Poll
+        vl53l4cd::wait::Interrupt(Input::new(p.PIN_5, Pull::Up)), // or vl53l4cd::wait::Poll
     );
 
     vl53.init().await.unwrap();
